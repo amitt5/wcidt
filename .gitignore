@@ -2,6 +2,9 @@
 
 # dependencies
 /node_modules
+/listener/node_modules
+/listener/dist
+/listener/auth_info
 /.pnp
 .pnp.*
 .yarn/*
