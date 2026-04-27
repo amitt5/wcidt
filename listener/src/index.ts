@@ -87,8 +87,6 @@ async function connectToWhatsApp() {
 
     for (const msg of messages) {
       // Skip messages we sent
-      if (msg.key.fromMe) continue;
-
       const groupJid = msg.key.remoteJid;
       if (!groupJid || !groupJid.endsWith("@g.us")) continue;
 
