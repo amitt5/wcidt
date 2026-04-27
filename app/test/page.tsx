@@ -12,6 +12,7 @@ type RawMessage = {
   timestamp: string;
   receivedAt: string;
   savedToDb: boolean;
+  source?: "whatsapp" | "telegram";
 };
 
 type DanceEvent = {
@@ -281,10 +282,17 @@ export default function TestPage() {
                 className="bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 space-y-1"
               >
                 <div className="flex items-center justify-between gap-2 text-xs text-gray-500">
-                  <span className="text-gray-400">{shortJid(msg.groupJid)}</span>
+                  <div className="flex items-center gap-2">
+                    {msg.source === "telegram" ? (
+                      <span className="text-blue-500 text-xs font-medium">TG</span>
+                    ) : (
+                      <span className="text-green-600 text-xs font-medium">WA</span>
+                    )}
+                    <span className="text-gray-400">{shortJid(msg.groupJid)}</span>
+                  </div>
                   <div className="flex items-center gap-2">
                     {msg.savedToDb && (
-                      <span className="text-green-600 text-xs">saved</span>
+                      <span className="text-gray-600 text-xs">saved</span>
                     )}
                     <span title={msg.receivedAt}>{relativeTime(msg.receivedAt)}</span>
                   </div>

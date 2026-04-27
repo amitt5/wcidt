@@ -1,16 +1,16 @@
 import { NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { createServiceClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60; // allow up to 60s for the Claude call
+export const maxDuration = 60;
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 type ExtractedEvent = {
   event_name: string | null;
-  date: string | null;        // YYYY-MM-DD
-  time: string | null;        // HH:MM
+  date: string | null;
+  time: string | null;
   location: string | null;
   styles: string[];
   ticket_price: string | null;
@@ -36,7 +36,7 @@ export async function POST() {
     return NextResponse.json({ processed: 0, events: [] });
   }
 
-  // 2. Format messages for Claude
+  // 2. Format messages for the LLM
   const messageIds = rows.map((r: { id: string }) => r.id);
   const today = new Date().toISOString().split("T")[0];
 
@@ -60,17 +60,17 @@ export async function POST() {
     })
     .join("\n\n---\n\n");
 
-  // 3. Call Claude
+  // 3. Call OpenAI — JSON mode requires the response to be an object, so we wrap in { events: [] }
   const systemPrompt = `You extract dance events from WhatsApp messages.
-Return ONLY a valid JSON array. No markdown, no explanation, just JSON.
+Return ONLY valid JSON in the format: { "events": [...] }
 Today's date is ${today}. Resolve relative dates ("this Saturday", "vanavond") from the message timestamp shown.
-If there are no events in the messages, return an empty array [].`;
+If there are no events, return { "events": [] }.`;
 
   const userPrompt = `These are WhatsApp messages from Amsterdam dance groups. Extract all dance events.
 
 ${formatted}
 
-Return a JSON array where each event has exactly these fields:
+Return { "events": [...] } where each event has exactly these fields:
 {
   "event_name": string or null,
   "date": "YYYY-MM-DD" or null,
@@ -85,26 +85,28 @@ Only include real events. Skip chat messages, questions, reactions, and spam.`;
 
   let extracted: ExtractedEvent[] = [];
   try {
-    const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
       max_tokens: 2048,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
     });
 
-    const text = response.content[0].type === "text" ? response.content[0].text : "[]";
-    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-    extracted = JSON.parse(cleaned);
-    if (!Array.isArray(extracted)) extracted = [];
+    const text = response.choices[0].message.content ?? '{"events":[]}';
+    const parsed = JSON.parse(text);
+    extracted = Array.isArray(parsed.events) ? parsed.events : [];
   } catch (err) {
-    console.error("Claude extraction failed:", err);
-    return NextResponse.json({ error: "Extraction failed — check ANTHROPIC_API_KEY" }, { status: 500 });
+    console.error("OpenAI extraction failed:", err);
+    return NextResponse.json({ error: "Extraction failed — check OPENAI_API_KEY" }, { status: 500 });
   }
 
   // 4. Insert valid events into DB
   const insertedEvents = [];
   for (const ev of extracted) {
-    if (!ev.event_name && !ev.date) continue; // skip completely empty
+    if (!ev.event_name && !ev.date) continue;
 
     const { data: inserted, error: insertError } = await supabase
       .from("events")

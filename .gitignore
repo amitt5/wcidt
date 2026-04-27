@@ -5,6 +5,7 @@
 /listener/node_modules
 /listener/dist
 /listener/auth_info
+/listener/telegram_session.txt
 /.pnp
 .pnp.*
 .yarn/*
