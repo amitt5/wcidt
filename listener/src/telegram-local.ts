@@ -50,7 +50,7 @@ async function saveToDb(
   await supabase
     .from("whatsapp_groups")
     .upsert(
-      { group_jid: groupJid, group_name: groupJid, city: "amsterdam" },
+      { group_jid: groupJid, group_name: groupJid },
       { onConflict: "group_jid", ignoreDuplicates: true }
     );
 
@@ -84,6 +84,7 @@ type StoredMessage = {
 const messages: StoredMessage[] = [];
 
 function addMessage(msg: StoredMessage) {
+  if (messages.some((m) => m.id === msg.id)) return;
   messages.unshift(msg);
   if (messages.length > 200) messages.pop();
 }

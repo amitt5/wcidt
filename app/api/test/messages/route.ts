@@ -3,47 +3,57 @@ import { createServiceClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
-async function fetchListener(port: number) {
-  const res = await fetch(`http://localhost:${port}/messages`, {
-    signal: AbortSignal.timeout(2000),
-  });
-  if (!res.ok) throw new Error(`port ${port} responded ${res.status}`);
-  return res.json();
+async function checkListenerHealth(port: number): Promise<boolean> {
+  try {
+    const res = await fetch(`http://localhost:${port}/health`, {
+      signal: AbortSignal.timeout(1000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 export async function GET() {
-  // Fetch from both listeners and DB count in parallel — each is optional
-  const [waResult, tgResult, dbResult] = await Promise.allSettled([
-    fetchListener(3001),
-    fetchListener(3002),
-    createServiceClient()
-      .from("raw_messages")
-      .select("id", { count: "exact", head: true })
-      .eq("processed", false),
-  ]);
+  const supabase = createServiceClient();
 
-  const waMessages = waResult.status === "fulfilled" ? waResult.value : [];
-  const tgMessages = tgResult.status === "fulfilled" ? tgResult.value : [];
+  const [messagesResult, unprocessedResult, groupsResult, waOnline, tgOnline] =
+    await Promise.allSettled([
+      supabase
+        .from("raw_messages")
+        .select("*, whatsapp_groups(group_name, city)")
+        .order("message_timestamp", { ascending: false })
+        .limit(200),
+      supabase
+        .from("raw_messages")
+        .select("id", { count: "exact", head: true })
+        .eq("processed", false),
+      supabase
+        .from("whatsapp_groups")
+        .select("id, group_jid, group_name, city")
+        .order("group_name"),
+      checkListenerHealth(3001),
+      checkListenerHealth(3002),
+    ]);
 
-  if (waMessages.length === 0 && tgMessages.length === 0 && waResult.status === "rejected") {
-    return NextResponse.json(
-      { error: "Listener not reachable — is it running? (cd listener && npm run dev:local)" },
-      { status: 503 }
-    );
-  }
-
-  // Tag each message with its source if not already tagged
-  const tagged = [
-    ...waMessages.map((m: Record<string, unknown>) => ({ source: "whatsapp", ...m })),
-    ...tgMessages.map((m: Record<string, unknown>) => ({ source: "telegram", ...m })),
-  ].sort(
-    (a, b) =>
-      new Date(b.receivedAt as string).getTime() -
-      new Date(a.receivedAt as string).getTime()
-  );
+  const messages =
+    messagesResult.status === "fulfilled"
+      ? (messagesResult.value.data ?? [])
+      : [];
 
   const unprocessedCount =
-    dbResult.status === "fulfilled" ? (dbResult.value.count ?? 0) : 0;
+    unprocessedResult.status === "fulfilled"
+      ? (unprocessedResult.value.count ?? 0)
+      : 0;
 
-  return NextResponse.json({ messages: tagged, unprocessedCount });
+  const groups =
+    groupsResult.status === "fulfilled"
+      ? (groupsResult.value.data ?? [])
+      : [];
+
+  const listenerOnline =
+    (waOnline.status === "fulfilled" && waOnline.value) ||
+    (tgOnline.status === "fulfilled" && tgOnline.value);
+
+  return NextResponse.json({ messages, unprocessedCount, groups, listenerOnline });
 }

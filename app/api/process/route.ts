@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { createServiceClient } from "@/lib/supabase/server";
 
@@ -17,16 +17,34 @@ type ExtractedEvent = {
   others: Record<string, unknown>;
 };
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   const supabase = createServiceClient();
 
+  const body = await req.json().catch(() => ({}));
+  const cityFilter: string | null = body.city ?? null;
+
   // 1. Fetch unprocessed messages with their group info
-  const { data: rows, error } = await supabase
+  let query = supabase
     .from("raw_messages")
     .select("id, message_text, message_timestamp, group_jid, whatsapp_groups(group_name, city)")
     .eq("processed", false)
     .order("message_timestamp", { ascending: true })
     .limit(200);
+
+  if (cityFilter) {
+    // Filter to messages whose group is assigned to the selected city
+    const { data: groupJids } = await supabase
+      .from("whatsapp_groups")
+      .select("group_jid")
+      .eq("city", cityFilter);
+    const jids = (groupJids ?? []).map((g: { group_jid: string }) => g.group_jid);
+    if (jids.length === 0) {
+      return NextResponse.json({ processed: 0, events: [] });
+    }
+    query = query.in("group_jid", jids);
+  }
+
+  const { data: rows, error } = await query;
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -41,11 +59,15 @@ export async function POST() {
   const today = new Date().toISOString().split("T")[0];
 
   type RawRow = {
+    id: string;
     message_timestamp: string;
     group_jid: string;
     message_text: string;
-    whatsapp_groups: { group_name: string }[] | { group_name: string } | null;
+    whatsapp_groups: { group_name: string; city: string | null }[] | { group_name: string; city: string | null } | null;
   };
+
+  // Build a per-message map of group city for use when inserting events
+  const messageGroupCity = new Map<string, string | null>();
 
   const formatted = (rows as RawRow[])
     .map((r) => {
@@ -56,9 +78,12 @@ export async function POST() {
         ? r.whatsapp_groups[0]
         : r.whatsapp_groups;
       const groupName = group?.group_name ?? r.group_jid;
+      messageGroupCity.set(r.id, group?.city ?? null);
       return `[${ts}] ${groupName}\n${r.message_text}`;
     })
     .join("\n\n---\n\n");
+
+  const cityLabel = cityFilter ?? "unknown city";
 
   // 3. Call OpenAI — JSON mode requires the response to be an object, so we wrap in { events: [] }
   const systemPrompt = `You extract dance events from WhatsApp messages.
@@ -66,7 +91,7 @@ Return ONLY valid JSON in the format: { "events": [...] }
 Today's date is ${today}. Resolve relative dates ("this Saturday", "vanavond") from the message timestamp shown.
 If there are no events, return { "events": [] }.`;
 
-  const userPrompt = `These are WhatsApp messages from Amsterdam dance groups. Extract all dance events.
+  const userPrompt = `These are WhatsApp messages from ${cityLabel} dance groups. Extract all dance events.
 
 ${formatted}
 
@@ -112,7 +137,7 @@ Only include real events. Skip chat messages, questions, reactions, and spam.`;
       .from("events")
       .insert({
         title: ev.event_name ?? "Dance Event",
-        city: "amsterdam",
+        city: cityFilter ?? "unknown",
         venue: ev.location,
         event_date: ev.date ?? today,
         start_time: ev.time,

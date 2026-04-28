@@ -49,7 +49,6 @@ async function saveToDb(
     .upsert({
       group_jid: groupJid,
       group_name: isGroup ? groupJid : `DM (${groupJid})`,
-      city: "amsterdam",
     }, {
       onConflict: "group_jid",
       ignoreDuplicates: true,
@@ -85,6 +84,7 @@ const messages: StoredMessage[] = [];
 const MAX_MESSAGES = 200;
 
 function addMessage(msg: StoredMessage) {
+  if (messages.some((m) => m.id === msg.id)) return;
   messages.unshift(msg);
   if (messages.length > MAX_MESSAGES) messages.pop();
 }
